@@ -17,7 +17,6 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 
 import { DecodedDataType, PdfProcessingState, PdfjsLibType, ScannerSettings, WifiCredentials } from '../types';
-import { parseWifiString } from '../utils/wifiParser';
 import { copyToClipboard } from '../utils/clipboardHelper';
 import { processImageFile } from '../utils/imageProcessor';
 import { processPdf } from '../utils/pdfProcessor';
@@ -93,7 +92,7 @@ const QRReader: React.FC = () => {
                     encryptionType: jsonData.encryptionType || "WPA"
                 });
             }
-        } catch (error) {
+        } catch (_) {
             setDataType(null);
 
             // Check if it's a wifi credential string
@@ -125,7 +124,7 @@ const QRReader: React.FC = () => {
     };
 
     // Handle setting change
-    const handleSettingChange = (setting: keyof ScannerSettings, value: any) => {
+    const handleSettingChange = (setting: keyof ScannerSettings, value: number | boolean) => {
         setScannerSettings(prev => ({
             ...prev,
             [setting]: value
@@ -259,7 +258,7 @@ const QRReader: React.FC = () => {
     const handleCopyPassword = (password: string) => {
         copyToClipboard(
             password,
-            (message) => {
+            () => {
                 setSnackbarMessage('WiFi password copied!');
                 setSnackbarOpen(true);
             },

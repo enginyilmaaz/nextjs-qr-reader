@@ -1,19 +1,19 @@
 'use client';
 
 import { scanWithSlidingWindow } from './qrScanner';
-import { PdfjsLibType, PdfProcessingState, ScannerSettings } from '../types';
+import { PdfjsLibType, PdfProcessingState, ScannerSettings, DecodedDataType, WifiCredentials } from '../types';
 
 export const processPdf = async (
     file: File,
     pdfjs: PdfjsLibType | null,
-    canvasRef: React.RefObject<HTMLCanvasElement>,
-    debugCanvasRef: React.RefObject<HTMLCanvasElement>,
+    canvasRef: React.RefObject<HTMLCanvasElement | null>,
+    debugCanvasRef: React.RefObject<HTMLCanvasElement | null>,
     scannerSettings: ScannerSettings,
     setDebugImage: (image: string | null) => void,
     setError: (error: string | null) => void,
     setDecodedData: (data: string | null) => void,
-    setDataType: (type: any) => void,
-    setWifiCredentials: (credentials: any) => void,
+    setDataType: (type: DecodedDataType) => void,
+    setWifiCredentials: (credentials: WifiCredentials | null) => void,
     setPdfProcessingState: (state: PdfProcessingState) => void,
     setIsLoading: (loading: boolean) => void,
     onDecode: (data: string) => void

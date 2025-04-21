@@ -13,7 +13,7 @@ import { ScannerSettings } from '../types';
 
 interface AdvancedOptionsProps {
     scannerSettings: ScannerSettings;
-    onSettingChange: (setting: keyof ScannerSettings, value: any) => void;
+    onSettingChange: (setting: keyof ScannerSettings, value: number | boolean) => void;
 }
 
 const AdvancedOptions: React.FC<AdvancedOptionsProps> = ({

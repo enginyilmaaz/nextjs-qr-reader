@@ -6,7 +6,7 @@ import { ScannerSettings } from '../types';
 export const processImageFile = (
     imageSource: string,
     scannerSettings: ScannerSettings,
-    debugCanvasRef: React.RefObject<HTMLCanvasElement>,
+    debugCanvasRef: React.RefObject<HTMLCanvasElement | null>,
     setIsLoading: (loading: boolean) => void,
     setError: (error: string | null) => void,
     onDebugImage: (imageUrl: string | null) => void,

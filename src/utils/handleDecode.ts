@@ -30,7 +30,7 @@ export const handleDecode = (data: string): HandleDecodeResult => {
             dataType: 'json',
             wifiCredentials: null
         };
-    } catch (error) {
+    } catch (_) {
         // Check if it's a wifi credential string
         if (data.startsWith('WIFI:')) {
             // Parse wifi credentials
