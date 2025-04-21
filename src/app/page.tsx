@@ -12,7 +12,6 @@ import {
   CircularProgress,
   Snackbar,
   Alert,
-  Grid,
   IconButton,
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -70,7 +69,7 @@ export default function QrReaderPage() {
     try {
       new URL(text);
       return true;
-    } catch (e) {
+    } catch {
       return false;
     }
   };
