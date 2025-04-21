@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useCallback, ChangeEvent, ClipboardEvent } from 'react';
+import React, { useState, useRef, useCallback, ChangeEvent, ClipboardEvent, useEffect } from 'react';
 import jsQR from 'jsqr';
 import {
   Container,
@@ -13,8 +13,10 @@ import {
   Snackbar,
   Alert,
   IconButton,
+  LinearProgress
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import * as pdfjsLib from 'pdfjs-dist';
 
 // Define types for better code clarity
 type DecodedDataType = 'text' | 'url' | 'wifi' | null;
@@ -22,6 +24,12 @@ interface WifiCredentials {
   ssid: string;
   type: string;
   password?: string;
+}
+interface PdfProcessingState {
+  processing: boolean;
+  message: string;
+  currentPage: number;
+  totalPages: number;
 }
 
 // Helper function to parse WIFI string
@@ -60,10 +68,16 @@ export default function QrReaderPage() {
   const [wifiCredentials, setWifiCredentials] = useState<WifiCredentials | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [pdfProcessingState, setPdfProcessingState] = useState<PdfProcessingState>({ processing: false, message: '', currentPage: 0, totalPages: 0 });
   const [snackbarOpen, setSnackbarOpen] = useState<boolean>(false);
   const [snackbarMessage, setSnackbarMessage] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pdfWorkerSrc = `/pdf.worker.min.mjs`; // Path to worker file in public folder
+
+  useEffect(() => {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+  }, [pdfWorkerSrc]);
 
   const isUrl = (text: string): boolean => {
     try {
@@ -76,7 +90,6 @@ export default function QrReaderPage() {
 
   const copyToClipboard = (text: string | undefined, message: string) => {
     if (!text) return;
-
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text)
         .then(() => {
@@ -93,8 +106,8 @@ export default function QrReaderPage() {
     }
   };
 
-  const handleDecode = useCallback((imageData: ImageData) => {
-    setIsLoading(true);
+  const handleDecode = useCallback((imageData: ImageData): boolean => {
+    // Reset previous results before attempting decode
     setError(null);
     setDecodedData(null);
     setDataType(null);
@@ -107,7 +120,7 @@ export default function QrReaderPage() {
 
       if (code && code.data) {
         const data = code.data;
-        setDecodedData(data);
+        setDecodedData(data); // Set data immediately
 
         const parsedWifi = parseWifiString(data);
         if (parsedWifi) {
@@ -118,22 +131,30 @@ export default function QrReaderPage() {
         } else {
           setDataType('text');
         }
+        // Found a QR code, return true to stop PDF processing
+        return true;
       } else {
-        setError('QR code not found or could not be read.');
+        // No QR code found on this canvas/page
+        // setError('QR code not found or could not be read.'); // Don't set error here, let PDF loop finish
+        return false;
       }
     } catch (err) {
       console.error('Decoding error:', err);
       setError('An error occurred while decoding the QR code.');
-    } finally {
-      setIsLoading(false);
+      return false; // Indicate failure
     }
-  }, []);
+    // Note: We removed the finally block setting isLoading=false from here
+    // It will be handled by the calling function (processImage/processPdf)
+  }, []); // Ensure dependencies are correct
 
-  const processImage = useCallback((imageSource: string) => {
+  // Processes a single image file
+  const processImageFile = useCallback((imageSource: string) => {
+    setIsLoading(true); // Set loading true for image processing
     const canvas = canvasRef.current;
     const context = canvas?.getContext('2d', { willReadFrequently: true });
     if (!canvas || !context) {
       setError('Could not prepare canvas.');
+      setIsLoading(false);
       return;
     }
 
@@ -144,43 +165,150 @@ export default function QrReaderPage() {
       context.drawImage(img, 0, 0, img.width, img.height);
       try {
         const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-        handleDecode(imageData);
+        const found = handleDecode(imageData);
+        if (!found) {
+          setError('No QR code found in the image.');
+        }
       } catch (e) {
         console.error("Error getting ImageData:", e);
         setError("A security error occurred while reading image data. Try a different image.");
-        setIsLoading(false);
       }
+      setIsLoading(false); // Set loading false after processing
     };
     img.onerror = () => {
       setError('Could not load image.');
       setIsLoading(false);
     };
     img.src = imageSource;
-    setIsLoading(true);
   }, [handleDecode]);
+
+  // Processes a PDF file, page by page
+  const processPdf = useCallback(async (file: File) => {
+    setError(null);
+    setDecodedData(null);
+    setDataType(null);
+    setWifiCredentials(null);
+    setPdfProcessingState({ processing: true, message: 'Reading PDF...', currentPage: 0, totalPages: 0 });
+    setIsLoading(true); // Use general loading indicator as well
+
+    const reader = new FileReader();
+
+    reader.onload = async (e) => {
+      if (e.target?.result && e.target.result instanceof ArrayBuffer) {
+        const pdfData = new Uint8Array(e.target.result);
+        const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+
+        try {
+          const pdf = await loadingTask.promise;
+          setPdfProcessingState(prev => ({ ...prev, message: 'Processing pages...', totalPages: pdf.numPages }));
+
+          let qrFound = false;
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            setPdfProcessingState(prev => ({ ...prev, message: `Processing page ${pageNum} of ${pdf.numPages}`, currentPage: pageNum }));
+
+            const page = await pdf.getPage(pageNum);
+            const viewport = page.getViewport({ scale: 1.5 }); // Adjust scale as needed
+            const canvas = canvasRef.current;
+            const context = canvas?.getContext('2d');
+
+            if (!canvas || !context) {
+              setError('Could not prepare canvas.');
+              qrFound = false; // Stop processing if canvas fails
+              break;
+            }
+
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            const renderContext = {
+              canvasContext: context,
+              viewport: viewport,
+            };
+            await page.render(renderContext).promise;
+
+            // Now try to decode QR from this page's canvas
+            try {
+              const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+              if (handleDecode(imageData)) {
+                qrFound = true;
+                break; // Stop loop if QR code is found
+              }
+            } catch (renderError) {
+              console.error(`Error getting image data for page ${pageNum}:`, renderError);
+              setError(`Error processing page ${pageNum}.`);
+              // Continue to next page potentially?
+            }
+          }
+
+          if (!qrFound) {
+            setError('No QR code found in the PDF.');
+          }
+
+        } catch (pdfError: any) {
+          console.error('Error loading/parsing PDF:', pdfError);
+          setError(pdfError.message || 'Could not read PDF file.');
+        }
+      } else {
+        setError('Could not read PDF file data.');
+      }
+      setPdfProcessingState({ processing: false, message: '', currentPage: 0, totalPages: 0 });
+      setIsLoading(false);
+    };
+
+    reader.onerror = () => {
+      setError('An error occurred while reading the file.');
+      setPdfProcessingState({ processing: false, message: '', currentPage: 0, totalPages: 0 });
+      setIsLoading(false);
+    };
+
+    reader.readAsArrayBuffer(file);
+
+  }, [handleDecode]); // Add handleDecode dependency
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) {
+    if (!file) return;
+
+    // Reset previous state
+    setError(null);
+    setDecodedData(null);
+    setDataType(null);
+    setWifiCredentials(null);
+    setPdfProcessingState({ processing: false, message: '', currentPage: 0, totalPages: 0 });
+
+    if (file.type === 'application/pdf') {
+      processPdf(file);
+    } else if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (e) => {
         if (e.target?.result && typeof e.target.result === 'string') {
-          processImage(e.target.result);
+          processImageFile(e.target.result); // Use the renamed function
         } else {
-          setError('Could not read file.');
+          setError('Could not read image file.');
         }
       };
       reader.onerror = () => {
-        setError('An error occurred while reading the file.');
+        setError('An error occurred while reading the image file.');
       }
       reader.readAsDataURL(file);
+    } else {
+      setError('Unsupported file type. Please upload an image or a PDF.');
     }
+
+    // Reset file input value
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
   const handlePaste = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
+    // Reset state before processing paste
+    setError(null);
+    setDecodedData(null);
+    setDataType(null);
+    setWifiCredentials(null);
+    setPdfProcessingState({ processing: false, message: '', currentPage: 0, totalPages: 0 });
+
     const items = event.clipboardData?.items;
     if (!items) return;
 
@@ -188,10 +316,11 @@ export default function QrReaderPage() {
       if (items[i].type.indexOf('image') !== -1) {
         const blob = items[i].getAsFile();
         if (blob) {
+          // Read blob as Data URL for processImageFile
           const reader = new FileReader();
           reader.onload = (e) => {
             if (e.target?.result && typeof e.target.result === 'string') {
-              processImage(e.target.result);
+              processImageFile(e.target.result);
             } else {
               setError('Could not read pasted image.');
             }
@@ -205,7 +334,8 @@ export default function QrReaderPage() {
         }
       }
     }
-  }, [processImage]);
+    // setError('Please paste an image.'); // Optionally inform if non-image is pasted
+  }, [processImageFile]); // Updated dependency
 
   const handleSnackbarClose = (event?: React.SyntheticEvent | Event, reason?: string) => {
     if (reason === 'clickaway') {
@@ -226,7 +356,7 @@ export default function QrReaderPage() {
         </Typography>
 
         <Typography variant="body1" align="center" sx={{ mb: 2 }}>
-          Upload a QR code image or paste it directly here.
+          Upload a QR code image or PDF, or paste an image directly here.
         </Typography>
 
         <Button
@@ -238,7 +368,7 @@ export default function QrReaderPage() {
           Upload File
           <input
             type="file"
-            accept="image/*"
+            accept="image/*,.pdf" // Updated accept attribute
             hidden
             ref={fileInputRef}
             onChange={handleFileChange}
@@ -248,7 +378,17 @@ export default function QrReaderPage() {
 
         <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
 
-        {isLoading && <CircularProgress sx={{ my: 2 }} />}
+        {/* Loading Indicators */}
+        {isLoading && !pdfProcessingState.processing && <CircularProgress sx={{ my: 2 }} />}
+        {pdfProcessingState.processing && (
+          <Box sx={{ width: '100%', my: 2 }}>
+            <Typography variant="body2" align="center" sx={{ mb: 1 }}>{pdfProcessingState.message}</Typography>
+            {pdfProcessingState.totalPages > 0 && (
+              <LinearProgress variant="determinate" value={(pdfProcessingState.currentPage / pdfProcessingState.totalPages) * 100} />
+            )}
+            {!pdfProcessingState.totalPages && <LinearProgress />} {/* Indeterminate for initial loading */}
+          </Box>
+        )}
 
         {error && (
           <Alert severity="error" sx={{ width: '100%', mt: 2 }}>
