@@ -22,6 +22,7 @@ import {
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import SettingsIcon from '@mui/icons-material/Settings';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import dynamic from 'next/dynamic';
 
 // Define types for better code clarity
@@ -592,7 +593,7 @@ export default function QrReaderPage() {
     <Container maxWidth="md" sx={{ mt: 4 }}>
       <Paper
         elevation={3}
-        sx={{ p: 3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+        sx={{ p: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}
         onPaste={handlePaste}
       >
         <Typography variant="h5" component="h1" gutterBottom>
@@ -619,18 +620,20 @@ export default function QrReaderPage() {
               disabled={isLoading}
             />
           </Button>
-
-          <Tooltip title="Advanced scanning options">
-            <Button
-              variant="outlined"
-              onClick={toggleAdvancedOptions}
-              startIcon={<SettingsIcon />}
-              disabled={isLoading}
-            >
-              Options
-            </Button>
-          </Tooltip>
         </Box>
+
+        <Tooltip title="Advanced scanning options">
+          <Button
+            variant="outlined"
+            onClick={toggleAdvancedOptions}
+            startIcon={<SettingsIcon />}
+            endIcon={<NoteAddIcon />}
+            disabled={isLoading}
+            sx={{ position: 'absolute', top: 16, right: 16 }}
+          >
+            Options
+          </Button>
+        </Tooltip>
 
         {/* Advanced options panel */}
         {showAdvancedOptions && (
