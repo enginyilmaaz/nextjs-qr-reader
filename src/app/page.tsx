@@ -16,7 +16,6 @@ import {
   LinearProgress
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import * as pdfjsLib from 'pdfjs-dist';
 
 // Define types for better code clarity
 type DecodedDataType = 'text' | 'url' | 'wifi' | null;
@@ -31,6 +30,9 @@ interface PdfProcessingState {
   currentPage: number;
   totalPages: number;
 }
+
+// Define types (add pdfjs type for state)
+type PdfjsLibType = typeof import('pdfjs-dist');
 
 // Helper function to parse WIFI string
 const parseWifiString = (data: string): WifiCredentials | null => {
@@ -71,13 +73,27 @@ export default function QrReaderPage() {
   const [pdfProcessingState, setPdfProcessingState] = useState<PdfProcessingState>({ processing: false, message: '', currentPage: 0, totalPages: 0 });
   const [snackbarOpen, setSnackbarOpen] = useState<boolean>(false);
   const [snackbarMessage, setSnackbarMessage] = useState<string>('');
+  const [pdfjs, setPdfjs] = useState<PdfjsLibType | null>(null); // State for loaded pdfjs library
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const pdfWorkerSrc = `/pdf.worker.min.mjs`; // Path to worker file in public folder
+  const pdfWorkerSrc = `/pdf.worker.min.mjs`;
 
+  // Effect to dynamically load pdfjs-dist
   useEffect(() => {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
-  }, [pdfWorkerSrc]);
+    import('pdfjs-dist').then(pdfjsDist => {
+      setPdfjs(pdfjsDist);
+    }).catch(error => {
+      console.error("Failed to load pdfjs-dist:", error);
+      setError("Could not load PDF processing library.");
+    });
+  }, []);
+
+  // Effect to set worker source once pdfjs is loaded
+  useEffect(() => {
+    if (pdfjs) { // Check if pdfjs is loaded
+      pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+    }
+  }, [pdfjs, pdfWorkerSrc]); // Depend on pdfjs state
 
   const isUrl = (text: string): boolean => {
     try {
@@ -184,19 +200,25 @@ export default function QrReaderPage() {
 
   // Processes a PDF file, page by page
   const processPdf = useCallback(async (file: File) => {
+    // Check if pdfjs is loaded
+    if (!pdfjs) {
+      setError('PDF processing library not loaded yet. Please try again in a moment.');
+      return;
+    }
+
     setError(null);
     setDecodedData(null);
     setDataType(null);
     setWifiCredentials(null);
     setPdfProcessingState({ processing: true, message: 'Reading PDF...', currentPage: 0, totalPages: 0 });
-    setIsLoading(true); // Use general loading indicator as well
+    setIsLoading(true);
 
     const reader = new FileReader();
 
     reader.onload = async (e) => {
       if (e.target?.result && e.target.result instanceof ArrayBuffer) {
         const pdfData = new Uint8Array(e.target.result);
-        const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+        const loadingTask = pdfjs.getDocument({ data: pdfData }); // Use pdfjs state variable
 
         try {
           const pdf = await loadingTask.promise;
@@ -207,13 +229,13 @@ export default function QrReaderPage() {
             setPdfProcessingState(prev => ({ ...prev, message: `Processing page ${pageNum} of ${pdf.numPages}`, currentPage: pageNum }));
 
             const page = await pdf.getPage(pageNum);
-            const viewport = page.getViewport({ scale: 1.5 }); // Adjust scale as needed
+            const viewport = page.getViewport({ scale: 2.0 });
             const canvas = canvasRef.current;
             const context = canvas?.getContext('2d');
 
             if (!canvas || !context) {
               setError('Could not prepare canvas.');
-              qrFound = false; // Stop processing if canvas fails
+              qrFound = false;
               break;
             }
 
@@ -268,7 +290,7 @@ export default function QrReaderPage() {
 
     reader.readAsArrayBuffer(file);
 
-  }, [handleDecode]); // Add handleDecode dependency
+  }, [pdfjs, handleDecode]); // Add pdfjs to dependencies
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
