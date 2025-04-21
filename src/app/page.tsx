@@ -131,7 +131,7 @@ export default function QrReaderPage() {
 
     try {
       const code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: 'dontInvert',
+        inversionAttempts: 'attemptBoth',
       });
 
       if (code && code.data) {
@@ -181,7 +181,17 @@ export default function QrReaderPage() {
       context.drawImage(img, 0, 0, img.width, img.height);
       try {
         const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-        const found = handleDecode(imageData);
+
+        // Convert to grayscale before decoding
+        const data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          data[i] = avg; // red
+          data[i + 1] = avg; // green
+          data[i + 2] = avg; // blue
+        }
+
+        const found = handleDecode(imageData); // Pass grayscale data
         if (!found) {
           setError('No QR code found in the image.');
         }
@@ -229,7 +239,7 @@ export default function QrReaderPage() {
             setPdfProcessingState(prev => ({ ...prev, message: `Processing page ${pageNum} of ${pdf.numPages}`, currentPage: pageNum }));
 
             const page = await pdf.getPage(pageNum);
-            const viewport = page.getViewport({ scale: 2.0 });
+            const viewport = page.getViewport({ scale: 2.5 });
             const canvas = canvasRef.current;
             const context = canvas?.getContext('2d');
 
@@ -250,8 +260,18 @@ export default function QrReaderPage() {
 
             // Now try to decode QR from this page's canvas
             try {
-              const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-              if (handleDecode(imageData)) {
+              let imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+              // Convert to grayscale before decoding
+              const data = imageData.data;
+              for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                data[i] = avg; // red
+                data[i + 1] = avg; // green
+                data[i + 2] = avg; // blue
+              }
+
+              if (handleDecode(imageData)) { // Pass grayscale data
                 qrFound = true;
                 break; // Stop loop if QR code is found
               }
