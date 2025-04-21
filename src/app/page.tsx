@@ -13,16 +13,24 @@ import {
   Snackbar,
   Alert,
   IconButton,
-  LinearProgress
+  LinearProgress,
+  Slider,
+  FormControlLabel,
+  Switch,
+  Divider,
+  Tooltip
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import SettingsIcon from '@mui/icons-material/Settings';
+import dynamic from 'next/dynamic';
 
 // Define types for better code clarity
-type DecodedDataType = 'text' | 'url' | 'wifi' | null;
+type DecodedDataType = 'text' | 'url' | 'wifi' | 'json' | null;
 interface WifiCredentials {
   ssid: string;
   type: string;
   password?: string;
+  encryptionType?: string;
 }
 interface PdfProcessingState {
   processing: boolean;
@@ -33,6 +41,17 @@ interface PdfProcessingState {
 
 // Define types (add pdfjs type for state)
 type PdfjsLibType = typeof import('pdfjs-dist');
+
+// New interface for scanner settings
+interface ScannerSettings {
+  useAdvancedScanning: boolean;
+  debugMode: boolean;
+  minScale: number;
+  maxScale: number;
+  scaleStep: number;
+  windowOverlap: number;
+  windowSizes: number[];
+}
 
 // Helper function to parse WIFI string
 const parseWifiString = (data: string): WifiCredentials | null => {
@@ -73,9 +92,24 @@ export default function QrReaderPage() {
   const [pdfProcessingState, setPdfProcessingState] = useState<PdfProcessingState>({ processing: false, message: '', currentPage: 0, totalPages: 0 });
   const [snackbarOpen, setSnackbarOpen] = useState<boolean>(false);
   const [snackbarMessage, setSnackbarMessage] = useState<string>('');
-  const [pdfjs, setPdfjs] = useState<PdfjsLibType | null>(null); // State for loaded pdfjs library
+  const [pdfjs, setPdfjs] = useState<PdfjsLibType | null>(null);
+
+  // New state variables for advanced scanning options
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState<boolean>(false);
+  const [scannerSettings, setScannerSettings] = useState<ScannerSettings>({
+    useAdvancedScanning: true, // Enable by default
+    debugMode: false,
+    minScale: 0.5,
+    maxScale: 2.0,
+    scaleStep: 0.25,
+    windowOverlap: 0.25, // 25% overlap between sliding windows
+    windowSizes: [300, 500] // Window sizes to use for sliding window
+  });
+  const [debugImage, setDebugImage] = useState<string | null>(null); // For debug visualization
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const debugCanvasRef = useRef<HTMLCanvasElement>(null); // For debug visualization
   const pdfWorkerSrc = `/pdf.worker.min.mjs`;
 
   // Effect to dynamically load pdfjs-dist
@@ -122,93 +156,250 @@ export default function QrReaderPage() {
     }
   };
 
-  const handleDecode = useCallback((imageData: ImageData): boolean => {
-    // Reset previous results before attempting decode
-    setError(null);
-    setDecodedData(null);
-    setDataType(null);
-    setWifiCredentials(null);
+  // Handle decoded QR code data
+  const handleDecode = (data: string) => {
+    setDecodedData(data);
 
+    // Try parsing as JSON
     try {
-      const code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: 'attemptBoth',
-      });
-
-      if (code && code.data) {
-        const data = code.data;
-        setDecodedData(data); // Set data immediately
-
-        const parsedWifi = parseWifiString(data);
-        if (parsedWifi) {
-          setDataType('wifi');
-          setWifiCredentials(parsedWifi);
-        } else if (isUrl(data)) {
-          setDataType('url');
-        } else {
-          setDataType('text');
-        }
-        // Found a QR code, return true to stop PDF processing
-        return true;
-      } else {
-        // No QR code found on this canvas/page
-        // setError('QR code not found or could not be read.'); // Don't set error here, let PDF loop finish
-        return false;
+      const jsonData = JSON.parse(data);
+      setDataType('json');
+      // Extract WiFi credentials if it contains wifi fields
+      if (jsonData.ssid && jsonData.password) {
+        setWifiCredentials({
+          ssid: jsonData.ssid,
+          password: jsonData.password,
+          type: jsonData.type || "WPA",
+          encryptionType: jsonData.encryptionType || "WPA"
+        });
       }
-    } catch (err) {
-      console.error('Decoding error:', err);
-      setError('An error occurred while decoding the QR code.');
-      return false; // Indicate failure
-    }
-    // Note: We removed the finally block setting isLoading=false from here
-    // It will be handled by the calling function (processImage/processPdf)
-  }, []); // Ensure dependencies are correct
+    } catch (error) {
+      setDataType(null);
 
-  // Processes a single image file
-  const processImageFile = useCallback((imageSource: string) => {
-    setIsLoading(true); // Set loading true for image processing
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext('2d', { willReadFrequently: true });
-    if (!canvas || !context) {
-      setError('Could not prepare canvas.');
-      setIsLoading(false);
-      return;
-    }
+      // Check if it's a wifi credential string
+      if (data.startsWith('WIFI:')) {
+        setDataType('wifi');
+        // Parse wifi credentials
+        const ssidMatch = data.match(/S:(.*?);/);
+        const passwordMatch = data.match(/P:(.*?);/);
+        const typeMatch = data.match(/T:(.*?);/);
 
-    const img = new Image();
-    img.onload = () => {
-      canvas.width = img.width;
-      canvas.height = img.height;
-      context.drawImage(img, 0, 0, img.width, img.height);
-      try {
-        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-
-        // Convert to grayscale before decoding
-        const data = imageData.data;
-        for (let i = 0; i < data.length; i += 4) {
-          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-          data[i] = avg; // red
-          data[i + 1] = avg; // green
-          data[i + 2] = avg; // blue
+        if (ssidMatch && passwordMatch) {
+          setWifiCredentials({
+            ssid: ssidMatch[1],
+            password: passwordMatch[1],
+            type: typeMatch ? typeMatch[1] : "WPA",
+            encryptionType: typeMatch ? typeMatch[1] : "WPA"
+          });
         }
+      }
+      // Check if it's a URL
+      else if (data.startsWith('http://') || data.startsWith('https://')) {
+        setDataType('url');
+      }
+      // Default to text
+      else {
+        setDataType('text');
+      }
+    }
+  };
 
-        const found = handleDecode(imageData); // Pass grayscale data
-        if (!found) {
-          setError('No QR code found in the image.');
+  // Advanced scanning function with sliding window technique
+  const scanWithSlidingWindow = useCallback((imageData: ImageData): boolean => {
+    if (!jsQR) return false;
+
+    // Original size attempt
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: "dontInvert",
+    });
+
+    if (code) {
+      handleDecode(code.data);
+      return true;
+    }
+
+    if (!scannerSettings.useAdvancedScanning) {
+      return false;
+    }
+
+    // Debug canvas setup for visualization
+    let debugContext: CanvasRenderingContext2D | null = null;
+    if (scannerSettings.debugMode && debugCanvasRef.current) {
+      debugCanvasRef.current.width = imageData.width;
+      debugCanvasRef.current.height = imageData.height;
+      debugContext = debugCanvasRef.current.getContext('2d');
+
+      if (debugContext) {
+        // Draw original image to debug canvas
+        const imgData = new ImageData(
+          new Uint8ClampedArray(imageData.data),
+          imageData.width,
+          imageData.height
+        );
+        debugContext.putImageData(imgData, 0, 0);
+      }
+    }
+
+    // Try different scales
+    for (let scale = scannerSettings.minScale; scale <= scannerSettings.maxScale; scale += scannerSettings.scaleStep) {
+      const scaledWidth = Math.floor(imageData.width * scale);
+      const scaledHeight = Math.floor(imageData.height * scale);
+
+      // Skip invalid dimensions
+      if (scaledWidth <= 0 || scaledHeight <= 0) continue;
+
+      // Create scaled canvas
+      const scaledCanvas = document.createElement('canvas');
+      scaledCanvas.width = scaledWidth;
+      scaledCanvas.height = scaledHeight;
+      const scaledContext = scaledCanvas.getContext('2d', { willReadFrequently: true });
+
+      if (!scaledContext) continue;
+
+      // Create temporary canvas with original image
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = imageData.width;
+      tempCanvas.height = imageData.height;
+      const tempContext = tempCanvas.getContext('2d', { willReadFrequently: true });
+
+      if (!tempContext) continue;
+
+      // Draw original image to temp canvas
+      tempContext.putImageData(imageData, 0, 0);
+
+      // Scale the image
+      scaledContext.drawImage(tempCanvas, 0, 0, scaledWidth, scaledHeight);
+
+      // Try scanning the entire scaled image first
+      try {
+        const scaledImageData = scaledContext.getImageData(0, 0, scaledWidth, scaledHeight);
+        const code = jsQR(scaledImageData.data, scaledWidth, scaledHeight, {
+          inversionAttempts: "dontInvert",
+        });
+
+        if (code) {
+          handleDecode(code.data);
+          return true;
         }
       } catch (e) {
-        console.error("Error getting ImageData:", e);
-        setError("A security error occurred while reading image data. Try a different image.");
+        console.error('Error scanning scaled image:', e);
       }
-      setIsLoading(false); // Set loading false after processing
+
+      // Now try with sliding windows
+      for (const windowSize of scannerSettings.windowSizes) {
+        const stepSize = Math.floor(windowSize * (1 - scannerSettings.windowOverlap));
+
+        for (let y = 0; y <= scaledHeight - windowSize; y += stepSize) {
+          for (let x = 0; x <= scaledWidth - windowSize; x += stepSize) {
+            // Debug visualization
+            if (debugContext && scannerSettings.debugMode) {
+              debugContext.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+              debugContext.lineWidth = 2;
+              debugContext.strokeRect(
+                x / scale,
+                y / scale,
+                windowSize / scale,
+                windowSize / scale
+              );
+            }
+
+            try {
+              // Get the window image data
+              const windowData = scaledContext.getImageData(x, y, windowSize, windowSize);
+
+              // Attempt to find QR code in this window
+              const code = jsQR(windowData.data, windowSize, windowSize, {
+                inversionAttempts: "dontInvert",
+              });
+
+              if (code) {
+                handleDecode(code.data);
+
+                // Highlight successful detection in debug view
+                if (debugContext && scannerSettings.debugMode) {
+                  debugContext.strokeStyle = 'rgba(0, 255, 0, 1)';
+                  debugContext.lineWidth = 3;
+                  debugContext.strokeRect(
+                    x / scale,
+                    y / scale,
+                    windowSize / scale,
+                    windowSize / scale
+                  );
+
+                  // Convert debug canvas to data URL and set it for display
+                  setDebugImage(debugCanvasRef.current?.toDataURL() || null);
+                }
+
+                return true;
+              }
+            } catch (e) {
+              console.error('Error scanning window:', e);
+            }
+          }
+        }
+      }
+    }
+
+    // If debug mode is on and we got here, show the debug image anyway to help diagnose issues
+    if (debugContext && scannerSettings.debugMode && debugCanvasRef.current) {
+      setDebugImage(debugCanvasRef.current.toDataURL());
+    }
+
+    return false;
+  }, [handleDecode, scannerSettings]);
+
+  // Modified processImageFile to use advanced scanning
+  const processImageFile = useCallback((imageSource: string) => {
+    setIsLoading(true); // Set loading true for image processing
+    setError(null);
+
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+
+    img.onload = () => {
+      try {
+        // Create a canvas element
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+
+        if (!context) {
+          setError('Could not get canvas context');
+          setIsLoading(false);
+          return;
+        }
+
+        // Draw the image to canvas
+        canvas.width = img.width;
+        canvas.height = img.height;
+        context.drawImage(img, 0, 0);
+
+        // Get image data from the canvas
+        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+        // Use advanced scanning method
+        const found = scanWithSlidingWindow(imageData);
+
+        if (!found) {
+          setError('No QR code found in the image');
+        }
+
+        setIsLoading(false);
+      } catch (err) {
+        console.error('Error processing image:', err);
+        setError('Error processing image. Please try another file.');
+        setIsLoading(false);
+      }
     };
+
     img.onerror = () => {
-      setError('Could not load image.');
+      setError('Failed to load image. Please try another file.');
       setIsLoading(false);
     };
-    img.src = imageSource;
-  }, [handleDecode]);
 
-  // Processes a PDF file, page by page
+    img.src = imageSource;
+  }, [scanWithSlidingWindow]);
+
+  // Update processPdf to use advanced scanning
   const processPdf = useCallback(async (file: File) => {
     // Check if pdfjs is loaded
     if (!pdfjs) {
@@ -216,6 +407,7 @@ export default function QrReaderPage() {
       return;
     }
 
+    setDebugImage(null); // Clear any previous debug image
     setError(null);
     setDecodedData(null);
     setDataType(null);
@@ -228,7 +420,7 @@ export default function QrReaderPage() {
     reader.onload = async (e) => {
       if (e.target?.result && e.target.result instanceof ArrayBuffer) {
         const pdfData = new Uint8Array(e.target.result);
-        const loadingTask = pdfjs.getDocument({ data: pdfData }); // Use pdfjs state variable
+        const loadingTask = pdfjs.getDocument({ data: pdfData });
 
         try {
           const pdf = await loadingTask.promise;
@@ -239,7 +431,7 @@ export default function QrReaderPage() {
             setPdfProcessingState(prev => ({ ...prev, message: `Processing page ${pageNum} of ${pdf.numPages}`, currentPage: pageNum }));
 
             const page = await pdf.getPage(pageNum);
-            const viewport = page.getViewport({ scale: 2.5 });
+            const viewport = page.getViewport({ scale: 2.5 }); // Use higher resolution for PDF pages
             const canvas = canvasRef.current;
             const context = canvas?.getContext('2d');
 
@@ -260,18 +452,10 @@ export default function QrReaderPage() {
 
             // Now try to decode QR from this page's canvas
             try {
-              let imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+              const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
 
-              // Convert to grayscale before decoding
-              const data = imageData.data;
-              for (let i = 0; i < data.length; i += 4) {
-                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-                data[i] = avg; // red
-                data[i + 1] = avg; // green
-                data[i + 2] = avg; // blue
-              }
-
-              if (handleDecode(imageData)) { // Pass grayscale data
+              // Use advanced scanning for PDF pages
+              if (scanWithSlidingWindow(imageData)) {
                 qrFound = true;
                 break; // Stop loop if QR code is found
               }
@@ -310,7 +494,20 @@ export default function QrReaderPage() {
 
     reader.readAsArrayBuffer(file);
 
-  }, [pdfjs, handleDecode]); // Add pdfjs to dependencies
+  }, [pdfjs, scanWithSlidingWindow]);
+
+  // Handler for advanced options changes
+  const handleSettingChange = (setting: keyof ScannerSettings, value: any) => {
+    setScannerSettings(prev => ({
+      ...prev,
+      [setting]: value
+    }));
+  };
+
+  // Toggle advanced options panel
+  const toggleAdvancedOptions = () => {
+    setShowAdvancedOptions(!showAdvancedOptions);
+  };
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -392,7 +589,7 @@ export default function QrReaderPage() {
   };
 
   return (
-    <Container maxWidth="sm" sx={{ mt: 4 }}>
+    <Container maxWidth="md" sx={{ mt: 4 }}>
       <Paper
         elevation={3}
         sx={{ p: 3, display: 'flex', flexDirection: 'column', alignItems: 'center' }}
@@ -406,24 +603,88 @@ export default function QrReaderPage() {
           Upload a QR code image or PDF, or paste an image directly here.
         </Typography>
 
-        <Button
-          variant="contained"
-          component="label"
-          disabled={isLoading}
-          sx={{ mb: 2 }}
-        >
-          Upload File
-          <input
-            type="file"
-            accept="image/*,.pdf" // Updated accept attribute
-            hidden
-            ref={fileInputRef}
-            onChange={handleFileChange}
+        <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+          <Button
+            variant="contained"
+            component="label"
             disabled={isLoading}
-          />
-        </Button>
+          >
+            Upload File
+            <input
+              type="file"
+              accept="image/*,.pdf"
+              hidden
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              disabled={isLoading}
+            />
+          </Button>
 
+          <Tooltip title="Advanced scanning options">
+            <Button
+              variant="outlined"
+              onClick={toggleAdvancedOptions}
+              startIcon={<SettingsIcon />}
+              disabled={isLoading}
+            >
+              Options
+            </Button>
+          </Tooltip>
+        </Box>
+
+        {/* Advanced options panel */}
+        {showAdvancedOptions && (
+          <Box sx={{ width: '100%', mb: 2, p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              Advanced Scanning Options
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={scannerSettings.useAdvancedScanning}
+                  onChange={(e) => handleSettingChange('useAdvancedScanning', e.target.checked)}
+                />
+              }
+              label="Use advanced multi-scale scanning"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={scannerSettings.debugMode}
+                  onChange={(e) => handleSettingChange('debugMode', e.target.checked)}
+                />
+              }
+              label="Debug mode (show scanning windows)"
+            />
+            <Divider sx={{ my: 1 }} />
+            <Typography variant="body2" gutterBottom>
+              Min scale: {scannerSettings.minScale}
+            </Typography>
+            <Slider
+              value={scannerSettings.minScale}
+              min={0.1}
+              max={1.0}
+              step={0.1}
+              onChange={(_, value) => handleSettingChange('minScale', value as number)}
+              disabled={!scannerSettings.useAdvancedScanning}
+            />
+            <Typography variant="body2" gutterBottom>
+              Max scale: {scannerSettings.maxScale}
+            </Typography>
+            <Slider
+              value={scannerSettings.maxScale}
+              min={1.0}
+              max={4.0}
+              step={0.5}
+              onChange={(_, value) => handleSettingChange('maxScale', value as number)}
+              disabled={!scannerSettings.useAdvancedScanning}
+            />
+          </Box>
+        )}
+
+        {/* Hidden canvases for image processing */}
         <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
+        <canvas ref={debugCanvasRef} style={{ display: 'none' }}></canvas>
 
         {/* Loading Indicators */}
         {isLoading && !pdfProcessingState.processing && <CircularProgress sx={{ my: 2 }} />}
@@ -433,7 +694,23 @@ export default function QrReaderPage() {
             {pdfProcessingState.totalPages > 0 && (
               <LinearProgress variant="determinate" value={(pdfProcessingState.currentPage / pdfProcessingState.totalPages) * 100} />
             )}
-            {!pdfProcessingState.totalPages && <LinearProgress />} {/* Indeterminate for initial loading */}
+            {!pdfProcessingState.totalPages && <LinearProgress />}
+          </Box>
+        )}
+
+        {/* Debug image display */}
+        {scannerSettings.debugMode && debugImage && (
+          <Box sx={{ width: '100%', my: 2, p: 1, border: '1px dashed', borderColor: 'grey.400', borderRadius: 1 }}>
+            <Typography variant="caption" color="text.secondary" gutterBottom>
+              Debug View: Green rectangle indicates found QR code, red rectangles show scanning windows
+            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1, overflow: 'auto' }}>
+              <img
+                src={debugImage}
+                alt="Debug visualization"
+                style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
+              />
+            </Box>
           </Box>
         )}
 
