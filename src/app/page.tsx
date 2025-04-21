@@ -244,9 +244,14 @@ export default function QrReaderPage() {
             setError('No QR code found in the PDF.');
           }
 
-        } catch (pdfError: any) {
+        } catch (pdfError: unknown) {
           console.error('Error loading/parsing PDF:', pdfError);
-          setError(pdfError.message || 'Could not read PDF file.');
+          // Type check before accessing properties
+          if (pdfError instanceof Error) {
+            setError(pdfError.message || 'Could not read PDF file.');
+          } else {
+            setError('An unknown error occurred while reading the PDF.');
+          }
         }
       } else {
         setError('Could not read PDF file data.');
